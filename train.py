@@ -16,10 +16,10 @@ class Vocab(object):
         self.i2w = u'_$ абвгдежзийклмнопрстуфхцчшщъыьэюя\n'
         self.w2i = {w: i for i, w in enumerate(self.i2w)}
 
-def load_dataset(fn, vocab):
+def load_dataset(args, vocab):
     ds = []
     lines = []
-    for line in codecs.open(fn, 'rt', encoding='utf-8'):
+    for line in codecs.open(args.filename, 'rt', encoding='utf-8'):
         line = line.strip()
         if not line:
             haiku = u'\n'.join(lines)
@@ -27,7 +27,16 @@ def load_dataset(fn, vocab):
             for char in haiku:
                 assert char in vocab.w2i
                 ids.append(vocab.w2i[char])
-            ds.append(ids)
+            if len(ids) > args.length:
+                start = 0
+                while start + args.length < len(ids) + args.length/2:
+                    end = start + args.length
+                    if end > len(ids):
+                        end = len(ids)
+                    ds.append(ids[start:end])
+                    start += args.length/2
+            else:
+                ds.append(ids)
             lines = []
         else:
             lines.append(line)
@@ -55,7 +64,7 @@ if __name__ == '__main__':
     arg('--l2-coeff', type=float, default=0.0)
     arg('--lr', type=float, default=0.001)
     # arg('--lr-decay', type=float, default=0.9)
-    arg('--length', type=int, default=30)
+    arg('--length', type=int, default=100)
     arg('--vocab_size', type=int, default=None)
     arg('--emb_size', type=int, default=20)
     arg('--iters', type=int, default=30000)
@@ -90,7 +99,7 @@ if __name__ == '__main__':
     vocab = Vocab()
     args.vocab_size = len(vocab.i2w)
 
-    ds = load_dataset(args.filename, vocab)
+    ds = load_dataset(args, vocab)
     random.shuffle(ds)
     n_val = int(len(ds) * 0.1)
     train, val = ds[n_val:], ds[:n_val]
