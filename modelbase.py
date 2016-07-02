@@ -44,7 +44,7 @@ class Model(object):
                 self.validate_and_report(sess, valid_inputs, summary_writer, 
                                          reported_loss, int(time.time() - t0))
 
-            if step % 1000 == 0 and self.args.save:
+            if (step % 1000 == 0 or i == self.args.iters - 1) and self.args.save:
                 saver.save(sess, self.args.save + '/model', global_step=step)
                     
     def train_step(self, sess, inputs, summary_writer):
