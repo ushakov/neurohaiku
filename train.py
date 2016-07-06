@@ -13,7 +13,7 @@ class Vocab(object):
     w2i = None
     
     def __init__(self):
-        self.i2w = u'_$ абвгдежзийклмнопрстуфхцчшщъыьэюя\n'
+        self.i2w = u'_$^ абвгдежзийклмнопрстуфхцчшщъыьэюя\n'
         self.w2i = {w: i for i, w in enumerate(self.i2w)}
 
 def load_dataset(args, vocab):
@@ -22,7 +22,7 @@ def load_dataset(args, vocab):
     for line in codecs.open(args.filename, 'rt', encoding='utf-8'):
         line = line.strip()
         if not line:
-            haiku = u'\n'.join(lines)
+            haiku = u'^{}$'.format('\n'.join(lines))
             ids = []
             for char in haiku:
                 assert char in vocab.w2i
@@ -69,12 +69,14 @@ if __name__ == '__main__':
     arg('--emb_size', type=int, default=20)
     arg('--iters', type=int, default=30000)
     arg('--report_step', type=int, default=100)
+    arg('--generate', action='store_true')
     arg('--save')
     arg('--load')
     # arg('--evaluate', action='store_true')
     arg('--model', default='lstm')
     arg('--max-gradient-norm', type=float, default=5)
     arg('--n-layers', type=int, default=1)
+    arg('--temperature', type=float, default=1.0)
     args = parser.parse_args()
     print args
     if args.save:
@@ -91,10 +93,11 @@ if __name__ == '__main__':
             f.write('git stamp: ')
         subprocess.call('git describe --dirty --always --tags >> ' + fname, shell=True)
 
-    seed = 42
-    random.seed(seed)
-    np.random.seed(seed)
-    tf.set_random_seed(seed)
+    if not args.generate:
+        seed = 42
+        random.seed(seed)
+        np.random.seed(seed)
+        tf.set_random_seed(seed)
 
     vocab = Vocab()
     args.vocab_size = len(vocab.i2w)
@@ -113,10 +116,23 @@ if __name__ == '__main__':
     model = model_module.Model(args)
 
     saver = tf.train.Saver(tf.all_variables())
-    with tf.Session() as sess:
+
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
+    config = tf.ConfigProto(gpu_options=gpu_options)
+    with tf.Session(config=config) as sess:
         if args.load:
             saver.restore(sess, args.load)
         else:
             sess.run(tf.initialize_all_variables())
 
-        model.train(sess, saver, train, val)
+        if not args.generate:
+            model.train(sess, saver, train, val)
+        else:
+            seed = u'^'
+            ids = model.generate(sess, vocab.w2i[seed])
+            res = [seed]
+            for id in ids:
+                if id == model.STOP_W:
+                    break
+                res.append(vocab.i2w[id])
+            print ''.join(res)

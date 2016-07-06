@@ -12,20 +12,23 @@ import modelbase
 class Model(modelbase.Model):
     def __init__(self, args):
         self.args = args
+        self.length = args.length - 1
 
-        self.inputs = tf.placeholder(tf.int32, [None, args.length])
-        self.true_outputs = tf.placeholder(tf.int32, [None, args.length])
+        self.inputs = tf.placeholder(tf.int32, [None, self.length])
+        self.true_outputs = tf.placeholder(tf.int32, [None, self.length])
         self.keep_prob = tf.placeholder(tf.float32)
 
         cell = tf.nn.rnn_cell.LSTMCell(args.hidden_size, state_is_tuple=True)
         cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.keep_prob)
         if args.n_layers > 1:
             cell = tf.nn.rnn_cell.MultiRNNCell([cell] * args.n_layers, state_is_tuple=True)
+            
+        real_batch_size = tf.shape(self.inputs)[0]
 
         self.embedding = tf.get_variable("embedding", [args.vocab_size, args.emb_size])
         embedded = tf.nn.embedding_lookup(self.embedding, self.inputs)
         embedded = [tf.squeeze(input_, [1])
-                    for input_ in tf.split(1, args.length, embedded)]
+                    for input_ in tf.split(1, self.length, embedded)]
 
         with tf.variable_scope('labels'):
             softmax_W = tf.get_variable('W', [args.hidden_size, args.vocab_size],
@@ -33,17 +36,27 @@ class Model(modelbase.Model):
             softmax_b = tf.get_variable('b', [args.vocab_size],
                                         initializer=tf.constant_initializer(0.0))
 
-        outputs, _ = tf.nn.rnn(cell, inputs = embedded, dtype=tf.float32)
+        self.initial_state = cell.zero_state(real_batch_size, tf.float32)
+
+        self.generated_output = []
+        def loop(prev, _):
+            prev = (tf.matmul(prev, softmax_W) + softmax_b) / args.temperature
+            prev_symbol = tf.stop_gradient(tf.multinomial(prev, 1))
+            self.generated_output.append(prev_symbol)
+            emb = tf.nn.embedding_lookup(self.embedding, prev_symbol)
+            return tf.squeeze(emb, [1])
+
+        outputs, _ = tf.nn.seq2seq.rnn_decoder(embedded, self.initial_state, cell, 
+                                               loop_function=loop if args.generate else None)
 
         self.output_probs = [(tf.matmul(out, softmax_W) + softmax_b) for out in outputs]
-        self.outputs = [tf.argmax(prob, 1) for prob in self.output_probs]
 
         softmax = []
-        for i in range(self.args.length-1):
+        for i in range(self.length-1):
             softmax.append(tf.nn.sparse_softmax_cross_entropy_with_logits(
                 self.output_probs[i], self.true_outputs[:,i],
                 name='seq_loss_{}'.format(i)))
-        self.loss = (1./self.args.length) * tf.reduce_mean(tf.add_n(softmax))
+        self.loss = (1./self.length) * tf.reduce_mean(tf.add_n(softmax))
         self.l2norm = sum([tf.nn.l2_loss(var) for var in tf.trainable_variables()])
 
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
@@ -55,18 +68,31 @@ class Model(modelbase.Model):
 
         self.train_op = optimizer.apply_gradients(
             zip(gradients, params), global_step=self.global_step)
+            
+    def generate(self, sess, feed):
+        feed_dict = self.prepare_batch([[feed]], False)
+        outputs = sess.run(self.generated_output, feed_dict)
+        return [out[0][0] for out in outputs]
 
     def prepare_batch(self, inputs, training=True):
         batch_size = len(inputs)
 
-        input = np.zeros([batch_size, self.args.length], dtype=np.int32)
-        output = np.zeros([batch_size, self.args.length], dtype=np.int64)
+        input = np.zeros([batch_size, self.length], dtype=np.int32)
+        output = np.zeros([batch_size, self.length], dtype=np.int64)
         for n_batch, input_ids in enumerate(inputs):
             if len(input_ids) > self.args.length:
                 input_ids = input_ids[:self.args.length]
-            n_pad = self.args.length - len(input_ids)
-            padded_input = input_ids + [self.PAD_W] * n_pad
-            padded_output = padded_input[1:] + [self.STOP_W]
+            if training:
+                net_input = input_ids[:-1]
+                net_output = input_ids[1:]
+                net_input_len = len(input_ids) - 1
+            else:
+                net_input = input_ids
+                net_output = input_ids
+                net_input_len = len(input_ids)
+            n_pad = self.length - net_input_len
+            padded_input = net_input + [self.PAD_W] * n_pad
+            padded_output = net_output + [self.PAD_W] * n_pad
             for i, w in enumerate(padded_input):
                 input[n_batch, i] = w
             for i, w in enumerate(padded_output):
